@@ -1,0 +1,2 @@
+#!/bin/bash
+curl "localhost:9097/bc?q=hello&p=00000000000000000000000000000000&b=18f3a534-3f69-469d-bc22-981a01d12ac2&x=000&m=1000000" | json_pp

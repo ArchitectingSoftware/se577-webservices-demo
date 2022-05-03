@@ -1,0 +1,11 @@
+version = 0.1
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "go-api-stack"
+s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-oq8vhuvh6psa"
+s3_prefix = "go-api-stack"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+image_repositories = []

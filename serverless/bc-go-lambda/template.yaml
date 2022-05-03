@@ -1,0 +1,56 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  bc-go-lambda
+  
+  Sample SAM Template for bc-go-lambda
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 5
+
+Resources:
+  BCGoAPI:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Cors:
+        AllowMethods: "'GET'"
+        AllowHeaders: "'content-type'"
+        AllowOrigin: "'*'"
+        AllowCredentials: False
+
+  BCGoFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: bc-go/
+      Handler: bc-go
+      Runtime: go1.x
+      Architectures:
+        - x86_64
+      Tracing: Active # https://docs.aws.amazon.com/lambda/latest/dg/lambda-x-ray.html
+      Events:
+        CatchAll:
+          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Properties:
+            Path: /bc-go
+            Method: GET
+            RestApiId: !Ref BCGoAPI
+      Environment: # More info about Env Vars: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#environment-object
+        Variables:
+          PARAM1: VALUE
+
+Outputs:
+  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
+  # Find out more about other implicit resources you can reference within SAM
+  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
+  BCGoAPI:
+    Description: "API Gateway endpoint URL for Prod environment for First Function"
+    Value: !Sub "https://${BCGoAPI}.execute-api.${AWS::Region}.amazonaws.com/Prod/bc-go/"
+  BCGoFunction:
+    Description: "BCGo Lambda Function ARN"
+    Value: !GetAtt BCGoFunction.Arn
+  BCGoFunctionIamRole:
+    Description: "Implicit IAM Role created for BCGo function"
+    Value: !GetAtt BCGoFunctionRole.Arn

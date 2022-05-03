@@ -1,0 +1,59 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'bc-go-lambda
+
+  Sample SAM Template for bc-go-lambda
+
+  '
+Globals:
+  Function:
+    Timeout: 5
+Resources:
+  BCGoAPI:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Cors:
+        AllowMethods: '''GET'''
+        AllowHeaders: '''content-type'''
+        AllowOrigin: '''*'''
+        AllowCredentials: false
+  BCGoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: BCGoFunction
+      Handler: bc-go
+      Runtime: go1.x
+      Architectures:
+      - x86_64
+      Tracing: Active
+      Events:
+        CatchAll:
+          Type: Api
+          Properties:
+            Path: /bc-go
+            Method: GET
+            RestApiId:
+              Ref: BCGoAPI
+      Environment:
+        Variables:
+          PARAM1: VALUE
+    Metadata:
+      SamResourceId: BCGoFunction
+Outputs:
+  BCGoAPI:
+    Description: API Gateway endpoint URL for Prod environment for First Function
+    Value:
+      Fn::Sub: https://${BCGoAPI}.execute-api.${AWS::Region}.amazonaws.com/Prod/bc-go/
+  BCGoFunction:
+    Description: BCGo Lambda Function ARN
+    Value:
+      Fn::GetAtt:
+      - BCGoFunction
+      - Arn
+  BCGoFunctionIamRole:
+    Description: Implicit IAM Role created for BCGo function
+    Value:
+      Fn::GetAtt:
+      - BCGoFunctionRole
+      - Arn
