@@ -7,6 +7,7 @@ help:
 	@echo "  Targets:"
 	@echo "	   build-server			Build the server executable"
 	@echo "	   run-server			Run the server executable"
+	@echo "	   run					Run the server from code"
 	@echo "	   docker-server		Containerize the server"
 	@echo "	   docker-run			Run server container"
 	@echo "	   test-server			Test server via curl"
@@ -16,6 +17,9 @@ help:
 build-server:
 	go build -o ./bin/bcservice ./src
 
+.PHONY: run
+run:
+	go run src/bcservice.go
 
 .PHONY: run-server
 run-server:

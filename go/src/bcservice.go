@@ -7,6 +7,10 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"log"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"runtime"
 	"strconv"
@@ -15,6 +19,7 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 	"github.com/reactivex/rxgo/v2"
 )
 
@@ -81,12 +86,74 @@ func bcHandler(ctx context.Context, goId uint64, lowerIndex uint64,
 	resChannel <- hashResult{found: false, nonce: upperIndex, hash: nullHash}
 }
 
+func ghProxy(c *gin.Context) {
+	remote, err := url.Parse("https://api.github.com")
+	if err != nil {
+		return
+	}
+	proxy := httputil.NewSingleHostReverseProxy(remote)
+	proxy.Director = func(req *http.Request) {
+		req.Header = c.Request.Header
+		req.Host = remote.Host
+		req.URL.Scheme = remote.Scheme
+		req.URL.Host = remote.Host
+		req.URL.Path = c.Param("ghapi")
+	}
+
+	proxy.ServeHTTP(c.Writer, c.Request)
+}
+
+func ghSecureProxy(c *gin.Context) {
+	remote, err := url.Parse("https://api.github.com")
+	if err != nil {
+		return
+	}
+	proxy := httputil.NewSingleHostReverseProxy(remote)
+	//note your github personal key should be in the GITHUB_ACCESS_TOKEN environment
+	//variable, im using a helper, see main(), and a .env file
+	//
+	//Still requires debugging
+	authHeader := "Token " + os.Getenv(("GITHUB_ACCESS_TOKEN"))
+
+	w := c.Writer
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+	w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+	//w.Header().Set("Authorization", authHeader)
+
+	proxy.Director = func(req *http.Request) {
+		req.Header = c.Request.Header
+		req.Header.Set("Authorization", authHeader)
+		req.Header.Set("Access-Control-Allow-Origin", "*")
+
+		req.Host = remote.Host
+		req.URL.Scheme = remote.Scheme
+		req.URL.Host = remote.Host
+		req.URL.Path = c.Param("ghapi")
+
+		log.Println(req.Header)
+		return
+	}
+
+	proxy.ServeHTTP(w, c.Request)
+}
+
 func main() {
 
 	println("STARTING")
+	err := godotenv.Load()
+	if err != nil {
+		log.Panicln("Unable to load the .env file, proxy operations might not work")
+	} else {
+		log.Println("Environment file loaded!")
+	}
+
 	flag.Parse()
 	r := gin.Default()
 	r.Use(cors.Default())
+
+	r.GET("/gh/*ghapi", ghProxy)
+	r.GET("/ghsecure/*ghapi", ghSecureProxy)
 
 	r.GET("/bc3", func(c *gin.Context) {
 		q := c.Query("q") //query data
