@@ -86,64 +86,53 @@ func bcHandler(ctx context.Context, goId uint64, lowerIndex uint64,
 	resChannel <- hashResult{found: false, nonce: upperIndex, hash: nullHash}
 }
 
-func ghProxy(c *gin.Context) {
+func ghProxyHandler(c *gin.Context, withSecurity bool) {
 	remote, err := url.Parse("https://api.github.com")
 	if err != nil {
 		return
 	}
+	//note your github personal key should be in the GITHUB_ACCESS_TOKEN environment
+	//variable, im using a helper, see main(), and a .env file
+	authHeader := "Token " + os.Getenv("GITHUB_ACCESS_TOKEN")
+
 	proxy := httputil.NewSingleHostReverseProxy(remote)
 	proxy.Director = func(req *http.Request) {
 		req.Header = c.Request.Header
 		req.Host = remote.Host
+
+		if withSecurity {
+			req.Header.Set("Authorization", authHeader)
+		}
 		req.URL.Scheme = remote.Scheme
 		req.URL.Host = remote.Host
 		req.URL.Path = c.Param("ghapi")
+	}
+
+	//This is a slight little hack because we are using the Go Gin Library.  This library
+	//adds CORS headers, but so does GitHub.  We need to remove the header here and allow
+	//Git to add them back or there will be two redundant Access-Control-Allow-Origin headers
+	//which is not allowed and the browser will complain
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		resp.Header.Del("Access-Control-Allow-Origin")
+		return nil
 	}
 
 	proxy.ServeHTTP(c.Writer, c.Request)
 }
 
+func ghProxy(c *gin.Context) {
+	ghProxyHandler(c, false)
+}
+
 func ghSecureProxy(c *gin.Context) {
-	remote, err := url.Parse("https://api.github.com")
-	if err != nil {
-		return
-	}
-	proxy := httputil.NewSingleHostReverseProxy(remote)
-	//note your github personal key should be in the GITHUB_ACCESS_TOKEN environment
-	//variable, im using a helper, see main(), and a .env file
-	//
-	//Still requires debugging
-	authHeader := "Token " + os.Getenv(("GITHUB_ACCESS_TOKEN"))
-
-	w := c.Writer
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
-	w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
-	//w.Header().Set("Authorization", authHeader)
-
-	proxy.Director = func(req *http.Request) {
-		req.Header = c.Request.Header
-		req.Header.Set("Authorization", authHeader)
-		req.Header.Set("Access-Control-Allow-Origin", "*")
-
-		req.Host = remote.Host
-		req.URL.Scheme = remote.Scheme
-		req.URL.Host = remote.Host
-		req.URL.Path = c.Param("ghapi")
-
-		log.Println(req.Header)
-		return
-	}
-
-	proxy.ServeHTTP(w, c.Request)
+	ghProxyHandler(c, true)
 }
 
 func main() {
 
-	println("STARTING")
 	err := godotenv.Load()
 	if err != nil {
-		log.Panicln("Unable to load the .env file, proxy operations might not work")
+		log.Println("Unable to load the .env file, secure proxy operations might not work")
 	} else {
 		log.Println("Environment file loaded!")
 	}
