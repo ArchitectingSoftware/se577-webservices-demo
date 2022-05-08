@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package BCGrpc;
+
+option go_package = "drexel.edu/bc-service/grpc/BCGrpc";
+
+service BCSolver {
+    rpc BlockSolver (BcRequest) returns (BcResponse) {}
+    rpc Ping (PingRequest) returns (PingResponse) {}
+}
+
+message BcRequest {
+    string query = 1;
+    string parent_block_id = 2;
+    string block_id = 3;
+    uint64 max_tries = 4;
+    string complexity = 5;
+}
+
+message BcResponse {
+    string block_hash = 1;
+    string block_id = 2;
+    int64 exec_time_ms = 3;
+    bool found = 4;
+    uint64 nonce = 5;
+    string parent_block_id = 6;
+    string query = 7;
+}
+
+message PingRequest {
+    string ping_message = 1;
+}
+
+message PingResponse {
+    string pong_response = 1;
+}
+
