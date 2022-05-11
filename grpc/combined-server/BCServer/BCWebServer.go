@@ -33,7 +33,7 @@ func BlockWebSolver(c *gin.Context) {
 		MaxTries:      m,
 	}
 
-	resp, err := BlockFinder(req)
+	resp, err := BlockFinder(req, uint64(0))
 	if err != nil {
 		//handle error here
 	}

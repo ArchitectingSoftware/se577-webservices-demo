@@ -12,7 +12,7 @@ import (
 	bc "drexel.edu/bc-service/grpc/BCGrpc"
 )
 
-func BlockFinder(req *bc.BcRequest) (*bc.BcResponse, error) {
+func BlockFinder(req *bc.BcRequest, startIdx uint64) (*bc.BcResponse, error) {
 	log.Println("IN Finder Handler")
 	q := req.Query
 	p := req.ParentBlockId
@@ -28,14 +28,17 @@ func BlockFinder(req *bc.BcRequest) (*bc.BcResponse, error) {
 		x = "000"
 	}
 
-	var solutionBlock *bc.BcResponse
+	//initial state to allocate the variable
+	var solutionBlock = &bc.BcResponse{
+		Found: false,
+	}
 
 	var hashBuffer bytes.Buffer
 	baseHashString := b + q + p //All hashes will have these things followed by the nonce
 
 	startTime := time.Now()
 	//Use the looping variable to find the nonce
-	for i := uint64(0); i < uint64(m); i++ {
+	for i := startIdx; i < uint64(m); i++ {
 		hashBuffer.Reset()
 		hashBuffer.WriteString(baseHashString)
 		hashBuffer.WriteString(strconv.FormatUint(i, 10))

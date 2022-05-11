@@ -6,6 +6,7 @@ option go_package = "drexel.edu/bc-service/grpc/BCGrpc";
 
 service BCSolver {
     rpc BlockSolver (BcRequest) returns (BcResponse) {}
+    rpc BlockSolverAll (BcRequest) returns (stream BcResponse) {}
     rpc Ping (PingRequest) returns (PingResponse) {}
 }
 

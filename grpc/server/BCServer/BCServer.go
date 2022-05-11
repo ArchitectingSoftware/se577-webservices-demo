@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -17,7 +18,47 @@ type Server struct {
 	bc.UnimplementedBCSolverServer
 }
 
+func (s *Server) BlockSolverAll(req *bc.BcRequest, stream bc.BCSolver_BlockSolverAllServer) error {
+	log.Println("Trying to find all solutions ", req.MaxTries)
+	var startPoint = uint64(0)
+
+	//set to true to get into the loop
+	var rsp = &bc.BcResponse{
+		Found: true,
+	}
+
+	for {
+		//exit condition
+		if !rsp.Found || startPoint >= req.MaxTries {
+			log.Println("IN EXIT")
+			break
+		}
+
+		rsp, err := s.blockFinder(req, startPoint)
+		if err != nil {
+			log.Println("Error solving block ", err)
+			return err
+		}
+
+		//only send back if solution found
+		if rsp.Found {
+			if err := stream.Send(rsp); err != nil {
+				return err
+			}
+		}
+
+		//now update counter, we found a solution, start looking n+1
+		startPoint = rsp.Nonce + 1
+	}
+	return nil
+}
+
 func (s *Server) BlockSolver(ctx context.Context, req *bc.BcRequest) (*bc.BcResponse, error) {
+	log.Println("Trying to find the first solutions")
+	return s.blockFinder(req, uint64(0))
+}
+
+func (s *Server) blockFinder(req *bc.BcRequest, startIdx uint64) (*bc.BcResponse, error) {
 	q := req.Query
 	p := req.ParentBlockId
 	b := req.BlockId
@@ -32,14 +73,17 @@ func (s *Server) BlockSolver(ctx context.Context, req *bc.BcRequest) (*bc.BcResp
 		x = "000"
 	}
 
-	var solutionBlock *bc.BcResponse
+	//initial state to allocate the variable
+	var solutionBlock = &bc.BcResponse{
+		Found: false,
+	}
 
 	var hashBuffer bytes.Buffer
 	baseHashString := b + q + p //All hashes will have these things followed by the nonce
 
 	startTime := time.Now()
 	//Use the looping variable to find the nonce
-	for i := uint64(0); i < uint64(m); i++ {
+	for i := startIdx; i < uint64(m); i++ {
 		hashBuffer.Reset()
 		hashBuffer.WriteString(baseHashString)
 		hashBuffer.WriteString(strconv.FormatUint(i, 10))

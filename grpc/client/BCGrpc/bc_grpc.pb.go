@@ -23,6 +23,7 @@ const _ = grpc.SupportPackageIsVersion7
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BCSolverClient interface {
 	BlockSolver(ctx context.Context, in *BcRequest, opts ...grpc.CallOption) (*BcResponse, error)
+	BlockSolverAll(ctx context.Context, in *BcRequest, opts ...grpc.CallOption) (BCSolver_BlockSolverAllClient, error)
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
 }
 
@@ -43,6 +44,38 @@ func (c *bCSolverClient) BlockSolver(ctx context.Context, in *BcRequest, opts ..
 	return out, nil
 }
 
+func (c *bCSolverClient) BlockSolverAll(ctx context.Context, in *BcRequest, opts ...grpc.CallOption) (BCSolver_BlockSolverAllClient, error) {
+	stream, err := c.cc.NewStream(ctx, &BCSolver_ServiceDesc.Streams[0], "/BCGrpc.BCSolver/BlockSolverAll", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &bCSolverBlockSolverAllClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type BCSolver_BlockSolverAllClient interface {
+	Recv() (*BcResponse, error)
+	grpc.ClientStream
+}
+
+type bCSolverBlockSolverAllClient struct {
+	grpc.ClientStream
+}
+
+func (x *bCSolverBlockSolverAllClient) Recv() (*BcResponse, error) {
+	m := new(BcResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func (c *bCSolverClient) Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error) {
 	out := new(PingResponse)
 	err := c.cc.Invoke(ctx, "/BCGrpc.BCSolver/Ping", in, out, opts...)
@@ -57,6 +90,7 @@ func (c *bCSolverClient) Ping(ctx context.Context, in *PingRequest, opts ...grpc
 // for forward compatibility
 type BCSolverServer interface {
 	BlockSolver(context.Context, *BcRequest) (*BcResponse, error)
+	BlockSolverAll(*BcRequest, BCSolver_BlockSolverAllServer) error
 	Ping(context.Context, *PingRequest) (*PingResponse, error)
 	mustEmbedUnimplementedBCSolverServer()
 }
@@ -67,6 +101,9 @@ type UnimplementedBCSolverServer struct {
 
 func (UnimplementedBCSolverServer) BlockSolver(context.Context, *BcRequest) (*BcResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method BlockSolver not implemented")
+}
+func (UnimplementedBCSolverServer) BlockSolverAll(*BcRequest, BCSolver_BlockSolverAllServer) error {
+	return status.Errorf(codes.Unimplemented, "method BlockSolverAll not implemented")
 }
 func (UnimplementedBCSolverServer) Ping(context.Context, *PingRequest) (*PingResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Ping not implemented")
@@ -100,6 +137,27 @@ func _BCSolver_BlockSolver_Handler(srv interface{}, ctx context.Context, dec fun
 		return srv.(BCSolverServer).BlockSolver(ctx, req.(*BcRequest))
 	}
 	return interceptor(ctx, in, info, handler)
+}
+
+func _BCSolver_BlockSolverAll_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(BcRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(BCSolverServer).BlockSolverAll(m, &bCSolverBlockSolverAllServer{stream})
+}
+
+type BCSolver_BlockSolverAllServer interface {
+	Send(*BcResponse) error
+	grpc.ServerStream
+}
+
+type bCSolverBlockSolverAllServer struct {
+	grpc.ServerStream
+}
+
+func (x *bCSolverBlockSolverAllServer) Send(m *BcResponse) error {
+	return x.ServerStream.SendMsg(m)
 }
 
 func _BCSolver_Ping_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -136,6 +194,12 @@ var BCSolver_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BCSolver_Ping_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "BlockSolverAll",
+			Handler:       _BCSolver_BlockSolverAll_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "bc.proto",
 }
