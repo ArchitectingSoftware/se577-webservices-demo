@@ -8,15 +8,13 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	ghproxy "drexel.edu/bc-service/go/src/GHProxy"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -36,6 +34,17 @@ type BCBlock struct {
 	BlockId    string
 }
 
+type BCBlockRequest struct {
+	Query          string
+	ParentBlock    string
+	BlockId        string
+	MaxTries       uint64
+	StartPosition  uint64
+	SolutionPrefix string
+	CrashSim       bool
+	ExceptionSim   bool
+}
+
 type hashResult struct {
 	found bool
 	nonce uint64
@@ -46,6 +55,38 @@ var (
 	portNum = flag.String("port", "9095", "Port number where server will listen")
 )
 
+//Process the request parameters
+func processRequestParms(c *gin.Context) BCBlockRequest {
+
+	req := BCBlockRequest{}
+
+	req.Query = c.Query("q")          //query data
+	req.ParentBlock = c.Query("p")    //parent hash
+	req.BlockId = c.Query("b")        //block id
+	req.SolutionPrefix = c.Query("x") //max iterations
+
+	//now parse the typed parameters
+	m, _ := strconv.ParseUint(c.Query("m"), 10, 64)
+	cr, _ := strconv.ParseBool(c.Query("crash"))
+	ex, _ := strconv.ParseBool(c.Query("exception"))
+
+	req.StartPosition = 0
+	req.MaxTries = m
+	req.CrashSim = cr
+	req.ExceptionSim = ex
+
+	//Handle Default Values
+	if req.MaxTries == 0 {
+		req.MaxTries = 500000 //default value
+	}
+	if req.SolutionPrefix == "" {
+		req.SolutionPrefix = "000"
+	}
+
+	return req
+}
+
+//simulates generating exception
 func ExceptionGenerator(exception bool, exit bool) {
 	if exception {
 		fmt.Println("Simulating an exception via a panic")
@@ -56,11 +97,222 @@ func ExceptionGenerator(exception bool, exit bool) {
 	}
 }
 
+//Simple handler, loops to find values
+func basicBcHandler(c *gin.Context) {
+	reqP := processRequestParms(c)
+
+	//JUST TO BE SAFE, for this StartPos should be zero
+	reqP.StartPosition = 0
+
+	//simulate a crash or an exception if one was indicated
+	ExceptionGenerator(reqP.ExceptionSim, reqP.CrashSim)
+
+	solutionBlock := BCBlock{}
+
+	var hashBuffer bytes.Buffer
+	//All hashes will have these things followed by the nonce
+	baseHashString := reqP.BlockId + reqP.Query + reqP.ParentBlock
+
+	startTime := time.Now()
+	//Use the looping variable to find the nonce
+	for i := reqP.StartPosition; i < reqP.MaxTries; i++ {
+		hashBuffer.Reset()
+		hashBuffer.WriteString(baseHashString)
+		hashBuffer.WriteString(strconv.FormatUint(i, 10))
+
+		shash := sha256.Sum256(hashBuffer.Bytes())
+
+		blockHashString := hex.EncodeToString(shash[:])
+		// println("XXX "+hashBuffer.String()+" "+ blockHashString)
+		if strings.HasPrefix(blockHashString, reqP.SolutionPrefix) {
+			log.Println("****Found it - ", i, blockHashString)
+			solutionBlock = BCBlock{
+				BlockHash:  blockHashString,
+				Nonce:      i,
+				Found:      true,
+				ParentHash: reqP.ParentBlock,
+				BlockId:    reqP.BlockId,
+			}
+			break
+		}
+	}
+
+	if solutionBlock.Found == false {
+		//recalc hash based on maximum search value m
+		finalHashString := baseHashString + strconv.FormatUint(reqP.MaxTries, 10)
+		hashBuffer.Reset()
+		hashBuffer.WriteString(finalHashString)
+		badHash := sha256.Sum256(hashBuffer.Bytes())
+		badBlockHashString := hex.EncodeToString(badHash[:])
+		solutionBlock = BCBlock{
+			BlockHash:  badBlockHashString,
+			Nonce:      reqP.MaxTries,
+			Found:      false,
+			ParentHash: reqP.ParentBlock,
+			BlockId:    reqP.BlockId,
+		}
+	}
+
+	durationTime := time.Now().Sub(startTime)
+
+	c.JSON(200, gin.H{
+		"query":           reqP.Query,
+		"blockHash":       string(solutionBlock.BlockHash),
+		"nonce":           solutionBlock.Nonce,
+		"executionTimeMs": durationTime.Nanoseconds() / 1e6, //convert to ms
+		"found":           solutionBlock.Found,
+		"parentHash":      solutionBlock.ParentHash,
+		"blockId":         solutionBlock.BlockId,
+	})
+}
+
+//Simple handler, loops to find values
+func observableBcHandler(c *gin.Context) {
+	reqP := processRequestParms(c)
+
+	//JUST TO BE SAFE, for this StartPos should be zero
+	reqP.StartPosition = 0
+
+	//simulate a crash or an exception if one was indicated
+	ExceptionGenerator(reqP.ExceptionSim, reqP.CrashSim)
+
+	solutionBlock := BCBlock{}
+
+	var hashBuffer bytes.Buffer
+	//All hashes will have these things followed by the nonce
+	baseHashString := reqP.BlockId + reqP.Query + reqP.ParentBlock
+
+	startTime := time.Now()
+
+	observable := rxgo.Range(int(reqP.StartPosition), int(reqP.MaxTries), rxgo.WithBufferedChannel(100)).
+		Filter(func(item interface{}) bool {
+			i := item.(int)
+
+			hashBuffer.Reset()
+			hashBuffer.WriteString(baseHashString)
+			hashBuffer.WriteString(strconv.FormatUint(uint64(i), 10))
+
+			shash := sha256.Sum256(hashBuffer.Bytes())
+			blockHashString := hex.EncodeToString(shash[:])
+			if strings.HasPrefix(blockHashString, reqP.SolutionPrefix) {
+				log.Println("****Found it! - ", i, blockHashString)
+				return true
+			} else {
+				return false
+			}
+		}).First()
+
+	for result := range observable.Observe() {
+		resultNonce := 0
+		resultFound := false
+
+		if result.Error() {
+			resultNonce = int(reqP.MaxTries)
+			resultFound = false
+		} else {
+			resultNonce = result.V.(int)
+			resultFound = true
+		}
+		finalHashString := baseHashString + strconv.FormatUint(reqP.MaxTries, 10)
+		hashBuffer.Reset()
+		hashBuffer.WriteString(finalHashString)
+		finalHash := sha256.Sum256(hashBuffer.Bytes())
+		finalBlockHashString := hex.EncodeToString(finalHash[:])
+
+		solutionBlock = BCBlock{
+			BlockHash:  finalBlockHashString,
+			Nonce:      uint64(resultNonce),
+			Found:      resultFound,
+			ParentHash: reqP.ParentBlock,
+			BlockId:    reqP.BlockId,
+		}
+	}
+
+	durationTime := time.Now().Sub(startTime)
+
+	c.JSON(200, gin.H{
+		"query":           reqP.Query,
+		"blockHash":       string(solutionBlock.BlockHash),
+		"nonce":           solutionBlock.Nonce,
+		"executionTimeMs": durationTime.Nanoseconds() / 1e6, //convert to ms
+		"found":           solutionBlock.Found,
+		"parentHash":      solutionBlock.ParentHash,
+		"blockId":         solutionBlock.BlockId,
+	})
+}
+
+//Simple handler, loops to find values
+func concurrentBcHandler(c *gin.Context) {
+	reqP := processRequestParms(c)
+
+	//JUST TO BE SAFE, for this StartPos should be zero
+	reqP.StartPosition = 0
+
+	//simulate a crash or an exception if one was indicated
+	ExceptionGenerator(reqP.ExceptionSim, reqP.CrashSim)
+
+	//All hashes will have these things followed by the nonce
+	baseHashString := reqP.BlockId + reqP.Query + reqP.ParentBlock
+
+	// Concurrency Setup
+	ctx, cancel := context.WithCancel(context.Background())
+
+	//Calculate the concurrency based on the number of CPUs - this is
+	//calculation heavy so we would like to get a solver running on each CPU
+	res := make(chan hashResult)
+	startTime := time.Now()
+
+	totalGoRoutines := uint64(runtime.NumCPU() - 1)
+	log.Println("Num CPUs = ", runtime.NumCPU())
+	window := reqP.MaxTries / totalGoRoutines
+
+	//Loop to start determined number of goroutines
+	for c := uint64(0); c < totalGoRoutines; c++ {
+		lb := c * window
+		ub := lb + window - 1
+		go bcHandler(ctx, c, lb, ub, baseHashString, reqP.SolutionPrefix, res)
+	}
+
+	//As the go routines finish, if one finds a solution then
+	//you can break out, worse case all goroutines will end
+	//and no solutions will be found
+	var asyncDone hashResult
+	for c := uint64(0); c < totalGoRoutines; c++ {
+		asyncDone = <-res
+		if asyncDone.found == false {
+			continue
+		} else {
+			break
+		}
+	}
+
+	//Cancel any running go routines, this would be the case
+	//if a routine finishes, but others are still running, this
+	//will cause the running routines to end because we already
+	//found a soluton
+	cancel()
+
+	//Now standard stuff to send back result
+	durationTime := time.Now().Sub(startTime)
+
+	c.JSON(200, gin.H{
+		"query":           reqP.Query,
+		"blockHash":       string(asyncDone.hash),
+		"nonce":           asyncDone.nonce,
+		"executionTimeMs": durationTime.Nanoseconds() / 1e6, //convert to ms
+		"found":           asyncDone.found,
+		"parentHash":      reqP.ParentBlock,
+		"blockId":         reqP.BlockId,
+	})
+}
+
+// Does the bc solver calulaction, helper for the concurrent calculator
 func bcHandler(ctx context.Context, goId uint64, lowerIndex uint64,
 	upperIndex uint64, baseString string, complexityPrefix string, resChannel chan<- hashResult) {
 
 	var hashBuffer bytes.Buffer
 
+	//Loop around on the assigned subset of the overall search space
 	for i := lowerIndex; i < upperIndex; i++ {
 		select {
 		case <-ctx.Done():
@@ -77,59 +329,21 @@ func bcHandler(ctx context.Context, goId uint64, lowerIndex uint64,
 		shash := sha256.Sum256(hashBuffer.Bytes())
 
 		blockHashString := hex.EncodeToString(shash[:])
-		// println("XXX "+hashBuffer.String()+" "+ blockHashString)
+
+		//Solution found, write that back on the result channel
 		if strings.HasPrefix(blockHashString, complexityPrefix) {
 			resChannel <- hashResult{found: true, nonce: i, hash: blockHashString}
 			break
 		}
 	}
+
+	//Soltion not found, write that back on the result channel
 	resChannel <- hashResult{found: false, nonce: upperIndex, hash: nullHash}
-}
-
-func ghProxyHandler(c *gin.Context, withSecurity bool) {
-	remote, err := url.Parse("https://api.github.com")
-	if err != nil {
-		return
-	}
-	//note your github personal key should be in the GITHUB_ACCESS_TOKEN environment
-	//variable, im using a helper, see main(), and a .env file
-	authHeader := "Token " + os.Getenv("GITHUB_ACCESS_TOKEN")
-
-	proxy := httputil.NewSingleHostReverseProxy(remote)
-	proxy.Director = func(req *http.Request) {
-		req.Header = c.Request.Header
-		req.Host = remote.Host
-
-		if withSecurity {
-			req.Header.Set("Authorization", authHeader)
-		}
-		req.URL.Scheme = remote.Scheme
-		req.URL.Host = remote.Host
-		req.URL.Path = c.Param("ghapi")
-	}
-
-	//This is a slight little hack because we are using the Go Gin Library.  This library
-	//adds CORS headers, but so does GitHub.  We need to remove the header here and allow
-	//Git to add them back or there will be two redundant Access-Control-Allow-Origin headers
-	//which is not allowed and the browser will complain
-	proxy.ModifyResponse = func(resp *http.Response) error {
-		resp.Header.Del("Access-Control-Allow-Origin")
-		return nil
-	}
-
-	proxy.ServeHTTP(c.Writer, c.Request)
-}
-
-func ghProxy(c *gin.Context) {
-	ghProxyHandler(c, false)
-}
-
-func ghSecureProxy(c *gin.Context) {
-	ghProxyHandler(c, true)
 }
 
 func main() {
 
+	//Load the config, will be needed for gh api key
 	err := godotenv.Load()
 	if err != nil {
 		log.Println("Unable to load the .env file, secure proxy operations might not work")
@@ -137,250 +351,22 @@ func main() {
 		log.Println("Environment file loaded!")
 	}
 
+	//setup the API handler
 	flag.Parse()
 	r := gin.Default()
 	r.Use(cors.Default())
 
-	r.GET("/gh/*ghapi", ghProxy)
-	r.GET("/ghsecure/*ghapi", ghSecureProxy)
+	//setup proxies for github
+	r.GET("/gh/*ghapi", ghproxy.GhProxy)
+	r.GET("/ghsecure/*ghapi", ghproxy.GhSecureProxy)
 
-	r.GET("/bc3", func(c *gin.Context) {
-		q := c.Query("q") //query data
-		p := c.Query("p") //parent hash
-		b := c.Query("b") //block id
-		x := c.Query("x") //max iterations
-		m, _ := strconv.ParseUint(c.Query("m"), 10, 64)
-		cr, _ := strconv.ParseBool(c.Query("crash"))
-		ex, _ := strconv.ParseBool(c.Query("exception"))
+	//Now the solver options
+	r.GET("/bc", basicBcHandler)       //Basic
+	r.GET("/bco", observableBcHandler) //Observable Demo
+	r.GET("/bcc", concurrentBcHandler) //Concurrent Demo
 
-		println("m2 = " + strconv.FormatUint(m, 10))
-		println("q = " + q + "p = " + p + "b = " + b + "x = " + x + "m = " + strconv.FormatUint(m, 10))
-
-		//Handle Default Values
-		if m == 0 {
-			m = 500000 //default value
-		}
-		if x == "" {
-			x = "000"
-		}
-
-		//simulate a crash or an exception if one was indicated
-		ExceptionGenerator(ex, cr)
-
-		ctx, cancel := context.WithCancel(context.Background())
-
-		baseHashString := b + q + p //All hashes will have these things followed by the nonce
-
-		res := make(chan hashResult)
-		startTime := time.Now()
-
-		totalGoRoutines := uint64(runtime.NumCPU() - 1)
-		fmt.Println("Num CPUs = ", runtime.NumCPU())
-		window := m / totalGoRoutines
-
-		for c := uint64(0); c < totalGoRoutines; c++ {
-			lb := c * window
-			ub := lb + window - 1
-			go bcHandler(ctx, c, lb, ub, baseHashString, x, res)
-		}
-
-		var asyncDone hashResult
-		for c := uint64(0); c < totalGoRoutines; c++ {
-			asyncDone = <-res
-			if asyncDone.found == false {
-				continue
-			} else {
-				break
-			}
-		}
-
-		cancel()
-		durationTime := time.Now().Sub(startTime)
-
-		c.JSON(200, gin.H{
-			"query":           q,
-			"blockHash":       string(asyncDone.hash),
-			"nonce":           asyncDone.nonce,
-			"executionTimeMs": durationTime.Nanoseconds() / 1e6, //convert to ms
-			"found":           asyncDone.found,
-			"parentHash":      p,
-			"blockId":         b,
-		})
-
-	})
-
-	r.GET("/bc2", func(c *gin.Context) {
-		q := c.Query("q") //query data
-		p := c.Query("p") //parent hash
-		b := c.Query("b") //block id
-		x := c.Query("x") //max iterations
-		m, _ := strconv.ParseUint(c.Query("m"), 10, 64)
-		cr, _ := strconv.ParseBool(c.Query("crash"))
-		ex, _ := strconv.ParseBool(c.Query("exception"))
-
-		println("m2 = " + strconv.FormatUint(m, 10))
-		println("q = " + q + "p = " + p + "b = " + b + "x = " + x + "m = " + strconv.FormatUint(m, 10))
-
-		//Handle Default Values
-		if m == 0 {
-			m = 500000 //default value
-		}
-		if x == "" {
-			x = "000"
-		}
-
-		//simulate a crash or an exception if one was indicated
-		ExceptionGenerator(ex, cr)
-
-		solutionBlock := BCBlock{}
-
-		var hashBuffer bytes.Buffer
-		baseHashString := b + q + p //All hashes will have these things followed by the nonce
-
-		startTime := time.Now()
-
-		println("debug")
-		observable := rxgo.Range(0, int(m), rxgo.WithBufferedChannel(100)).
-			Filter(func(item interface{}) bool {
-				i := item.(int)
-
-				hashBuffer.Reset()
-				hashBuffer.WriteString(baseHashString)
-				hashBuffer.WriteString(strconv.FormatUint(uint64(i), 10))
-
-				shash := sha256.Sum256(hashBuffer.Bytes())
-				blockHashString := hex.EncodeToString(shash[:])
-				if strings.HasPrefix(blockHashString, x) {
-					println("****Found it! - ", i, blockHashString)
-					return true
-				} else {
-					return false
-				}
-			}).First()
-
-		for result := range observable.Observe() {
-			resultNonce := 0
-			resultFound := false
-
-			if result.Error() {
-				//println("not found")
-				resultNonce = int(m)
-				resultFound = false
-			} else {
-				resultNonce = result.V.(int)
-				resultFound = true
-				//fmt.Printf("observable success %v", result.V)
-			}
-
-			finalHashString := b + q + p + strconv.FormatUint(uint64(resultNonce), 10)
-			hashBuffer.Reset()
-			hashBuffer.WriteString(finalHashString)
-			finalHash := sha256.Sum256(hashBuffer.Bytes())
-			finalBlockHashString := hex.EncodeToString(finalHash[:])
-
-			solutionBlock = BCBlock{
-				BlockHash:  finalBlockHashString,
-				Nonce:      uint64(resultNonce),
-				Found:      resultFound,
-				ParentHash: p,
-				BlockId:    b,
-			}
-		}
-
-		durationTime := time.Now().Sub(startTime)
-
-		c.JSON(200, gin.H{
-			"query":           q,
-			"blockHash":       string(solutionBlock.BlockHash),
-			"nonce":           solutionBlock.Nonce,
-			"executionTimeMs": durationTime.Nanoseconds() / 1e6, //convert to ms
-			"found":           solutionBlock.Found,
-			"parentHash":      solutionBlock.ParentHash,
-			"blockId":         solutionBlock.BlockId,
-		})
-	})
-
-	r.GET("/bc", func(c *gin.Context) {
-		q := c.Query("q") //query data
-		p := c.Query("p") //parent hash
-		b := c.Query("b") //block id
-		x := c.Query("x") //max iterations
-		m, _ := strconv.ParseUint(c.Query("m"), 10, 64)
-		cr, _ := strconv.ParseBool(c.Query("crash"))
-		ex, _ := strconv.ParseBool(c.Query("exception"))
-
-		println("m1 = " + strconv.FormatUint(m, 10))
-		println("q = " + q + "p = " + p + "b = " + b + "x = " + x + "m = " + strconv.FormatUint(m, 10))
-
-		//Handle Default Values
-		if m == 0 {
-			m = 500000 //default value
-		}
-		if x == "" {
-			x = "000"
-		}
-
-		//simulate a crash or an exception if one was indicated
-		ExceptionGenerator(ex, cr)
-
-		solutionBlock := BCBlock{}
-
-		var hashBuffer bytes.Buffer
-		baseHashString := b + q + p //All hashes will have these things followed by the nonce
-
-		startTime := time.Now()
-		//Use the looping variable to find the nonce
-		for i := uint64(0); i < uint64(m); i++ {
-			hashBuffer.Reset()
-			hashBuffer.WriteString(baseHashString)
-			hashBuffer.WriteString(strconv.FormatUint(i, 10))
-
-			shash := sha256.Sum256(hashBuffer.Bytes())
-
-			blockHashString := hex.EncodeToString(shash[:])
-			// println("XXX "+hashBuffer.String()+" "+ blockHashString)
-			if strings.HasPrefix(blockHashString, x) {
-				println("****Found it - ", i, blockHashString)
-				solutionBlock = BCBlock{
-					BlockHash:  blockHashString,
-					Nonce:      i,
-					Found:      true,
-					ParentHash: p,
-					BlockId:    b,
-				}
-				break
-			}
-		}
-
-		if solutionBlock.Found == false {
-			//recalc hash based on maximum search value m
-			finalHashString := b + q + p + strconv.FormatUint(uint64(m), 10)
-			hashBuffer.Reset()
-			hashBuffer.WriteString(finalHashString)
-			badHash := sha256.Sum256(hashBuffer.Bytes())
-			badBlockHashString := hex.EncodeToString(badHash[:])
-			solutionBlock = BCBlock{
-				BlockHash:  badBlockHashString,
-				Nonce:      uint64(m),
-				Found:      false,
-				ParentHash: p,
-				BlockId:    b,
-			}
-		}
-
-		durationTime := time.Now().Sub(startTime)
-
-		c.JSON(200, gin.H{
-			"query":           q,
-			"blockHash":       string(solutionBlock.BlockHash),
-			"nonce":           solutionBlock.Nonce,
-			"executionTimeMs": durationTime.Nanoseconds() / 1e6, //convert to ms
-			"found":           solutionBlock.Found,
-			"parentHash":      solutionBlock.ParentHash,
-			"blockId":         solutionBlock.BlockId,
-		})
-	})
-
+	//Being able to set the host and port via the environment is helpful if we
+	//containerize
 	host := os.Getenv("GO_BC_HOST")
 	if len(host) == 0 {
 		host = "0.0.0.0"
@@ -391,6 +377,6 @@ func main() {
 		println("port " + *portNum)
 	}
 
+	//Finally, lets run
 	r.Run(host + ":" + port)
-	//r.Run() // listen and serve on 0.0.0.0:8080
 }

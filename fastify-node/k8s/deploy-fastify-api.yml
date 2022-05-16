@@ -1,0 +1,47 @@
+# We are using a deployment kind, that creates a kubernetes replica set under the covers
+# this allows us to scale up and scald down, initial replicas will be one for demo
+# purposes
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: se577-fastify-api-deployment
+  labels:
+    app: se577-fastify-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: se577-fastify-api
+  template:
+    metadata:
+      labels:
+        app: se577-fastify-api
+    spec:
+      # Just a quick word on imagePullPolicy: IfNotPresent, by default kubernetes will try to pull
+      # container images from a container repository like docker hub.  Since we are just demoing
+      # we manually installed the container inside of kind via the command in the instructions
+      # 'kind load docker-image ...' thus this tells the API to check if the container is present
+      # and if so use it, if not, find it in the repository.  Also notice i did not tag the image
+      # by default it will put ':latest' at the end, best practice is to fix to a tagged image so
+      # that the build process is largely ephemeral - eg, .../se577-demo-app:v-1.1
+      containers:
+        - name: se577-fastify-api
+          image: architecting-software/bc-service-node-fastify 
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9095
+          resources:
+            limits:
+              cpu: '500m'
+              memory: '10Mi'
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: se577-fastify-api-svc
+spec:
+  selector:
+    app: se577-fastify-api
+  ports:
+    # Default port used by the image
+    - port: 9094

@@ -5,8 +5,10 @@
   "license": "MIT",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prod": "tsc && node ./build/server.js",
     "start": "node server.js",
-    "watch": "nodemon  server.ts"
+    "watch": "nodemon  server.ts",
+    "start-docker": "node ./server.js"
   },
   "dependencies": {
     "@fastify/swagger": "^6.0.0",

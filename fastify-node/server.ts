@@ -207,7 +207,7 @@ let result = range(0, maxTries).pipe(
 
 
 //set the server up, just hard coding the listen port for now to 4080
-server.listen(4080, (err, address) => {
+server.listen(9094, "::",  (err,address) => {
   if (err) {
     console.error(err)
     process.exit(1)
