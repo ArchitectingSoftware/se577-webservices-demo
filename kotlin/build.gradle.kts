@@ -4,11 +4,12 @@ val logback_version: String by project
 
 plugins {
     application
-    kotlin("jvm") version "1.6.20"
-    kotlin("plugin.serialization") version "1.6.20"
-    id("com.github.johnrengelman.shadow") version "7.0.0"
-    id("com.google.cloud.tools.jib") version "3.2.1"
+    kotlin("jvm") version "1.8.21"
+    kotlin("plugin.serialization") version "1.8.21"
+    id("com.github.johnrengelman.shadow") version "8.1.1"
+    id("com.google.cloud.tools.jib") version "3.3.1"
 }
+
 
 group = "com.ArchitectingSoftware"
 version = "0.0.1"
